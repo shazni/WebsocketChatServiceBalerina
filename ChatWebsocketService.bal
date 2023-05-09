@@ -1,9 +1,9 @@
 import ballerina/io;
 import ballerina/websocket;
 
-map<int> USER_MAP = {};
-map<websocket:Caller> CONNECTION_MAP = {};
-int USER_ID = 0;
+map<int> userMap = {};
+map<websocket:Caller> connectionMap = {};
+isolated int lastUserId = 0;
 
 service / on new websocket:Listener(9876) {
     resource function get .() returns websocket:Service {
@@ -20,29 +20,37 @@ service class ChatService {
 
     remote function onOpen(websocket:Caller caller) returns error? {
         io:println("Connection is opened for a new client");
-        USER_ID = USER_ID + 1;
-        USER_MAP[caller.getConnectionId()] = USER_ID;
-        CONNECTION_MAP[caller.getConnectionId()] = caller;
+        int currentUserId;
 
-        foreach string connectionId in CONNECTION_MAP.keys() {
-            websocket:Caller connectedCaller = CONNECTION_MAP.get(connectionId);
-            json broadCastMessage = { "type": "users", "count": USER_MAP.length(),  "new_user": true, "id": USER_ID };
-            check connectedCaller->writeMessage(broadCastMessage.toJsonString());
+        lock {
+            lastUserId += 1;
+            currentUserId = lastUserId;
+        }
+
+        userMap[caller.getConnectionId()] = currentUserId;
+        connectionMap[caller.getConnectionId()] = caller;
+
+        foreach string connectionId in connectionMap.keys() {
+            websocket:Caller connectedCaller = connectionMap.get(connectionId);
+            json broadCastMessage = { "type": "users", "count": userMap.length(),  "new_user": true, "id": currentUserId };
+            check connectedCaller->writeMessage(broadCastMessage);
         }
     }
 
     remote function onClose(websocket:Caller caller) returns error? {
-        _ = CONNECTION_MAP.remove(caller.getConnectionId());
-        int userId = USER_MAP.remove(caller.getConnectionId());
+        _ = connectionMap.remove(caller.getConnectionId());
+        int userId = userMap.remove(caller.getConnectionId());
 
-        foreach string connectionId in CONNECTION_MAP.keys() {
-            websocket:Caller connectedCaller = CONNECTION_MAP.get(connectionId);
-            json broadCastMessage = { "type": "users", "count": USER_MAP.length(),  "new_user": false, "id": userId };
-            check connectedCaller->writeMessage(broadCastMessage.toJsonString());
+        foreach string connectionId in connectionMap.keys() {
+            websocket:Caller connectedCaller = connectionMap.get(connectionId);
+            json broadCastMessage = { "type": "users", "count": userMap.length(),  "new_user": false, "id": userId };
+            check connectedCaller->writeMessage(broadCastMessage);
         }
 
-        if USER_MAP.length() == 0 {
-            USER_ID = 0;
+        if userMap.length() == 0 {
+            lock {
+                lastUserId = 0;
+            }
         }
     }
 
@@ -53,10 +61,10 @@ service class ChatService {
         string message = check event.message;
 
         if event.action == "message" {
-            foreach string connectionId in CONNECTION_MAP.keys() {
-                websocket:Caller connectedCaller = CONNECTION_MAP.get(connectionId);
-                json broadCastMessage = { "type": "msg", "msg": message,  "id": USER_MAP[caller.getConnectionId()] };
-                check connectedCaller->writeMessage(broadCastMessage.toJsonString());
+            foreach string connectionId in connectionMap.keys() {
+                websocket:Caller connectedCaller = connectionMap.get(connectionId);
+                json broadCastMessage = { "type": "msg", "msg": message,  "id": userMap[caller.getConnectionId()] };
+                check connectedCaller->writeMessage(broadCastMessage);
             }
         } else {
             io:println("Unsupported event type - ", event.name);
